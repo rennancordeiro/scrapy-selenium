@@ -1,11 +1,12 @@
 """This module contains the ``SeleniumMiddleware`` scrapy middleware"""
-
+import time
 from importlib import import_module
 
 from scrapy import signals
 from scrapy.exceptions import NotConfigured
 from scrapy.http import HtmlResponse
 from selenium.webdriver.support.ui import WebDriverWait
+import undetected_chromedriver as uc
 
 from .http import SeleniumRequest
 
@@ -13,8 +14,8 @@ from .http import SeleniumRequest
 class SeleniumMiddleware:
     """Scrapy middleware handling the requests using selenium"""
 
-    def __init__(self, driver_name, driver_executable_path,
-        browser_executable_path, command_executor, driver_arguments):
+    def __init__(self, driver_name, driver_executable_path, driver_arguments,
+        browser_executable_path):
         """Initialize the selenium webdriver
 
         Parameters
@@ -27,8 +28,6 @@ class SeleniumMiddleware:
             A list of arguments to initialize the driver
         browser_executable_path: str
             The path of the executable binary of the browser
-        command_executor: str
-            Selenium remote server endpoint
         """
 
         webdriver_base_path = f'selenium.webdriver.{driver_name}'
@@ -40,7 +39,6 @@ class SeleniumMiddleware:
         driver_options_klass = getattr(driver_options_module, 'Options')
 
         driver_options = driver_options_klass()
-
         if browser_executable_path:
             driver_options.binary_location = browser_executable_path
         for argument in driver_arguments:
@@ -51,19 +49,7 @@ class SeleniumMiddleware:
             f'{driver_name}_options': driver_options
         }
 
-        # locally installed driver
-        if driver_executable_path is not None:
-            driver_kwargs = {
-                'executable_path': driver_executable_path,
-                f'{driver_name}_options': driver_options
-            }
-            self.driver = driver_klass(**driver_kwargs)
-        # remote driver
-        elif command_executor is not None:
-            from selenium import webdriver
-            capabilities = driver_options.to_capabilities()
-            self.driver = webdriver.Remote(command_executor=command_executor,
-                                           desired_capabilities=capabilities)
+        self.driver = uc.Chrome(**driver_kwargs)
 
     @classmethod
     def from_crawler(cls, crawler):
@@ -72,22 +58,18 @@ class SeleniumMiddleware:
         driver_name = crawler.settings.get('SELENIUM_DRIVER_NAME')
         driver_executable_path = crawler.settings.get('SELENIUM_DRIVER_EXECUTABLE_PATH')
         browser_executable_path = crawler.settings.get('SELENIUM_BROWSER_EXECUTABLE_PATH')
-        command_executor = crawler.settings.get('SELENIUM_COMMAND_EXECUTOR')
         driver_arguments = crawler.settings.get('SELENIUM_DRIVER_ARGUMENTS')
 
-        if driver_name is None:
-            raise NotConfigured('SELENIUM_DRIVER_NAME must be set')
-
-        if driver_executable_path is None and command_executor is None:
-            raise NotConfigured('Either SELENIUM_DRIVER_EXECUTABLE_PATH '
-                                'or SELENIUM_COMMAND_EXECUTOR must be set')
+        if not driver_name or not driver_executable_path:
+            raise NotConfigured(
+                'SELENIUM_DRIVER_NAME and SELENIUM_DRIVER_EXECUTABLE_PATH must be set'
+            )
 
         middleware = cls(
             driver_name=driver_name,
             driver_executable_path=driver_executable_path,
-            browser_executable_path=browser_executable_path,
-            command_executor=command_executor,
-            driver_arguments=driver_arguments
+            driver_arguments=driver_arguments,
+            browser_executable_path=browser_executable_path
         )
 
         crawler.signals.connect(middleware.spider_closed, signals.spider_closed)
@@ -114,6 +96,9 @@ class SeleniumMiddleware:
             WebDriverWait(self.driver, request.wait_time).until(
                 request.wait_until
             )
+
+        if request.wait_time:
+            time.sleep(request.wait_time)
 
         if request.screenshot:
             request.meta['screenshot'] = self.driver.get_screenshot_as_png()
